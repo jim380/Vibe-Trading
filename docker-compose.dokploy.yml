@@ -22,7 +22,14 @@
 
 services:
   vibe-trading:
-    build: .
+    build:
+      context: .
+      # buildkit's default build netns could not resolve deb.debian.org on
+      # this host (apt retried 360s, then 'Unable to locate package
+      # build-essential'), while the daemon, the git clone and runtime
+      # containers all resolve fine. Building on the host network makes the
+      # build inherit the host resolver. Drop this if daemon DNS is fixed.
+      network: host
     ports:
       # Loopback only. The reverse proxy reaches the container over the
       # shared network below, not via this published port.
