@@ -76,6 +76,14 @@ services:
       # OAuth login will not persist: /home/vibe/.config is tmpfs below.
       - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN:-}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Uvicorn defaults forwarded_allow_ips to 127.0.0.1, so X-Forwarded-*
+      # from the reverse proxy (which connects from the shared network, not
+      # loopback) is discarded and request.url.scheme stays "http". The
+      # cross-site guard in src/api/security.py then derives port 80 while a
+      # browser's Origin implies 443, and every unsafe method 403s with
+      # "Cross-site request denied". Trusting the proxy is safe here: the
+      # published port is loopback-only, so nothing but the proxy can reach it.
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-*}
       # --- market data ---
       - TUSHARE_TOKEN=${TUSHARE_TOKEN:-}
     extra_hosts:
