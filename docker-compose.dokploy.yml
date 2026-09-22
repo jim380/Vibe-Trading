@@ -1,0 +1,123 @@
+# Dokploy deployment variant of docker-compose.yml.
+#
+# Upstream's compose targets a developer laptop. Three things make it
+# unusable under a PaaS, and this file changes only those:
+#
+#   1. `env_file: agent/.env` + the `./agent/.env` bind mount. That file is
+#      gitignored, so it does not exist after a CI/PaaS clone and compose
+#      aborts. Config arrives here as environment variables instead, supplied
+#      by Dokploy's env store and interpolated below.
+#   2. `${VIBE_TW_STOCK_DATA_DIR:-${HOME}/...}` resolves $HOME against the
+#      deploy process (root), not a human's account. The optional Taiwan
+#      snapshot mount is dropped; re-add it with an absolute path if needed.
+#   3. `VIBE_TRADING_TRUST_DOCKER_LOOPBACK=1` pairs with a 127.0.0.1 bind on a
+#      laptop. Behind a reverse proxy, requests arrive from inside the Docker
+#      network, so that flag is unset here and API_AUTH_KEY is required.
+#
+# The `frontend` dev service is omitted: the runtime image already serves the
+# built UI from frontend/dist, so it is redundant outside local development.
+#
+# Everything else -- the VT-007 hardening block, all five named volumes -- is
+# carried over verbatim from upstream. Keep it that way.
+
+services:
+  vibe-trading:
+    build: .
+    ports:
+      # Loopback only. The reverse proxy reaches the container over the
+      # shared network below, not via this published port.
+      - "127.0.0.1:8899:8899"
+    # Explicit passthrough. ":-" prevents warnings for unused providers.
+    environment:
+      # --- API/web auth. REQUIRED before exposing beyond localhost. ---
+      - API_AUTH_KEY=${API_AUTH_KEY:-}
+      # --- provider selection + shared tuning ---
+      - LANGCHAIN_PROVIDER=${LANGCHAIN_PROVIDER:-}
+      - LANGCHAIN_MODEL_NAME=${LANGCHAIN_MODEL_NAME:-}
+      - LANGCHAIN_TEMPERATURE=${LANGCHAIN_TEMPERATURE:-0.0}
+      - TIMEOUT_SECONDS=${TIMEOUT_SECONDS:-120}
+      - MAX_RETRIES=${MAX_RETRIES:-2}
+      # --- Anthropic Messages API (native, or a compatible proxy) ---
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-}
+      # --- Z.ai / Zhipu ---
+      - ZAI_API_KEY=${ZAI_API_KEY:-}
+      - ZAI_BASE_URL=${ZAI_BASE_URL:-}
+      - ZHIPU_API_KEY=${ZHIPU_API_KEY:-}
+      - ZHIPU_BASE_URL=${ZHIPU_BASE_URL:-}
+      # --- OpenAI / gateways ---
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-}
+      - REQUESTY_API_KEY=${REQUESTY_API_KEY:-}
+      - REQUESTY_BASE_URL=${REQUESTY_BASE_URL:-}
+      # --- others ---
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-}
+      - VIBE_TRADING_DEEPSEEK_ADAPTER=${VIBE_TRADING_DEEPSEEK_ADAPTER:-auto}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - MOONSHOT_API_KEY=${MOONSHOT_API_KEY:-}
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MODELSCOPE_API_KEY=${MODELSCOPE_API_KEY:-}
+      - MODELSCOPE_BASE_URL=${MODELSCOPE_BASE_URL:-}
+      # OAuth login will not persist: /home/vibe/.config is tmpfs below.
+      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN:-}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # --- market data ---
+      - TUSHARE_TOKEN=${TUSHARE_TOKEN:-}
+    extra_hosts:
+      # host-gateway lets the container reach Ollama running on the host.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Upstream issue #197: without vibe-home, recreating the container wipes
+      # persistent memory, the cross-session index, user skills, shadow
+      # accounts, the hypothesis registry and broker connector config.
+      - vibe-runs:/app/agent/runs
+      - vibe-sessions:/app/agent/sessions
+      - vibe-home:/home/vibe/.vibe-trading
+      - vibe-swarm-runs:/app/agent/.swarm/runs
+      - vibe-uploads:/app/agent/uploads
+    # --- Runtime hardening (VT-007), verbatim from upstream ---
+    cap_drop:
+      - ALL
+    # SETUID/SETGID are kept on purpose: runner.py drops privilege to the
+    # unprivileged vibe-sandbox user for LLM-generated-code subprocesses.
+    # They are granted at container start, not gained via escalation, so
+    # no-new-privileges does not neutralize them. Removing them breaks the
+    # sandbox.
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - "no-new-privileges:true"
+    read_only: true
+    # Writable scratch on the read-only rootfs: /tmp plus the cache dirs
+    # matplotlib/fontconfig write to during PDF rendering.
+    tmpfs:
+      - /tmp
+      - /home/vibe/.cache
+      - /home/vibe/.config
+    mem_limit: 4g
+    cpus: 2
+    pids_limit: 512
+    restart: unless-stopped
+    networks:
+      - dokploy-network
+
+volumes:
+  vibe-runs:
+  vibe-sessions:
+  vibe-home:
+  vibe-swarm-runs:
+  vibe-uploads:
+
+networks:
+  # Created by Dokploy; the reverse proxy routes to containers on it.
+  dokploy-network:
+    external: true
